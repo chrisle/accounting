@@ -1,0 +1,26 @@
+services:
+  costs:
+    build: .
+    image: costs:latest
+    container_name: costs
+    restart: unless-stopped
+    # Bound to loopback only. `tailscale serve 3000` fronts this with TLS and
+    # tailnet identity. Never publish this on 0.0.0.0.
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      # Proxmox: bind-mount a ZFS dataset here (e.g. /rpool/data/costs).
+      - /srv/costs:/data
+    environment:
+      COSTS_DATA_DIR: /data
+      # 32-byte key, base64. Encrypts OAuth/refresh tokens at rest in SQLite.
+      # Generate: openssl rand -base64 32
+      COSTS_ENCRYPTION_KEY: ${COSTS_ENCRYPTION_KEY:?set COSTS_ENCRYPTION_KEY in .env}
+      COSTS_TZ: ${COSTS_TZ:-America/Los_Angeles}
+      # Optional: nightly sync time, 24h local
+      COSTS_SYNC_AT: ${COSTS_SYNC_AT:-04:15}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s

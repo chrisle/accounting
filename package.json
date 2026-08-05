@@ -1,0 +1,42 @@
+{
+  "name": "costs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts",
+    "db:reset": "rm -f ${COSTS_DATA_DIR:-./data}/costs.db* && npm run db:migrate && npm run db:seed",
+    "test": "tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@google-cloud/bigquery": "^7.9.1",
+    "better-sqlite3": "^11.8.1",
+    "clsx": "^2.1.1",
+    "csv-parse": "^5.6.0",
+    "drizzle-orm": "^0.38.4",
+    "fflate": "^0.8.3",
+    "next": "^15.1.6",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^2.15.0",
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "drizzle-kit": "^0.30.2",
+    "tailwindcss": "^4.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
