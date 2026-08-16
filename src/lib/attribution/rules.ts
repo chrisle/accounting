@@ -16,18 +16,45 @@ const EMPTY: Classification = {
   ruleId: null,
 }
 
-/** Strip payment-processor noise so rules match the merchant, not the receipt. */
+/**
+ * Strip payment-processor noise so rules match the merchant, not the receipt.
+ *
+ * The result is load-bearing twice over: rules regex against it, and the
+ * `merchant:` override fingerprint hashes it. So a merchant that normalises to
+ * the empty string is worse than one that normalises badly — it matches no rule,
+ * and it collides with every other emptied merchant, which would make one
+ * override silently reattribute unrelated charges.
+ */
 export function normalizeMerchant(raw: string): string {
-  return raw
+  const out = raw
     .toLowerCase()
     .replace(/\b(sq|tst|pp|paypal|sp|amzn mktp|amzn|wl)\s*\*/g, '')
     .replace(/\b(purchase|payment|recurring|autopay|pos|debit|credit)\b/g, '')
-    .replace(/\b[a-z0-9]{10,}\b/g, ' ') // order/auth ids
+    // "AMZN Mktp US*2H4XY9" puts the order token after the locale, so the
+    // prefix rule above never fires on it. Left in, the token is per-order and
+    // every Amazon charge gets its own fingerprint.
+    .replace(/\bamzn mktp [a-z]{2}\*[a-z0-9]+/g, 'amzn mktp')
+    .replace(/\bamazon\.com\*[a-z0-9]+/g, 'amazon.com')
+    // Order/auth ids. Requiring a digit is what keeps this from eating ordinary
+    // one-word merchants — "cloudflare", "squarespace" and "youtubepremium" are
+    // all 10+ characters and were being blanked entirely.
+    .replace(/\b(?=[a-z0-9]*\d)[a-z0-9]{10,}\b/g, ' ')
     .replace(/\b\d{3}-\d{7}-\d{7}\b/g, ' ') // amazon order numbers
     .replace(/#\S+/g, ' ')
     .replace(/[^a-z0-9&.\- ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+
+  // Never hand back an empty string: fall back to a minimally-cleaned form so
+  // the merchant stays distinguishable even if every rule above stripped it.
+  if (out) return out
+  return (
+    raw
+      .toLowerCase()
+      .replace(/[^a-z0-9&.\- ]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim() || 'unknown'
+  )
 }
 
 /**
