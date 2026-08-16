@@ -6,6 +6,14 @@ export type JobLogger = (msg: string) => void
 
 export type DateRange = { start: string; end: string } // ISO yyyy-mm-dd
 
+export type NormalizedAccount = {
+  id: string
+  name?: string | null
+  institution?: string | null
+  mask?: string | null
+  type?: string | null
+}
+
 export type NormalizedTxn = {
   id: string
   date: string
@@ -13,6 +21,12 @@ export type NormalizedTxn = {
   merchantRaw: string
   merchantNorm: string
   accountId?: string | null
+  /**
+   * The account this charge is on. `transactions.account_id` is a foreign key,
+   * so whatever a source reports has to exist in `accounts` before the charge
+   * can be written — carry the details through rather than dropping them.
+   */
+  account?: NormalizedAccount | null
   copilotCategory?: string | null
   notes?: string | null
   pending?: boolean

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { eq, gte, inArray, sql } from 'drizzle-orm'
 import {
+  accounts,
   allocations,
   db,
   lineItems,
@@ -20,7 +21,7 @@ import {
   type DraftAllocation,
 } from '@/lib/reconcile/invariants'
 import { adapterFor, ADAPTERS } from '@/lib/sources/registry'
-import type { JobLogger } from '@/lib/sources/types'
+import type { JobLogger, NormalizedTxn } from '@/lib/sources/types'
 
 const noop: JobLogger = () => {}
 
@@ -248,24 +249,67 @@ function passthroughDrafts(
 
 // ------------------------------------------------------------------- store
 
+/**
+ * `transactions.account_id` is a foreign key, so every account a batch refers to
+ * has to exist before the charges are written. Sources report accounts inline
+ * with the transaction rather than as a separate feed, so derive them here —
+ * that way any source gets this for free instead of each one remembering.
+ *
+ * A row that names an account updates it; a row that only carries an id gets a
+ * stub so the key resolves, and a later sync with real details fills it in.
+ */
+async function upsertAccountsFor(rows: NormalizedTxn[]): Promise<void> {
+  const named = new Map<string, typeof accounts.$inferInsert>()
+  const stubs = new Map<string, typeof accounts.$inferInsert>()
+
+  for (const r of rows) {
+    if (!r.accountId) continue
+    const a = r.account
+    if (a?.name) {
+      named.set(r.accountId, {
+        id: r.accountId,
+        name: a.name,
+        institution: a.institution ?? null,
+        mask: a.mask ?? null,
+        type: a.type ?? null,
+      })
+    } else if (!named.has(r.accountId)) {
+      stubs.set(r.accountId, { id: r.accountId, name: r.accountId })
+    }
+  }
+
+  for (const [id, row] of named) stubs.delete(id)
+
+  if (stubs.size > 0) {
+    // Don't let a stub overwrite a name a previous sync established.
+    await db.insert(accounts).values([...stubs.values()]).onConflictDoNothing()
+  }
+  if (named.size > 0) {
+    await db
+      .insert(accounts)
+      .values([...named.values()])
+      .onConflictDoUpdate({
+        target: accounts.id,
+        set: {
+          name: sql`excluded.name`,
+          institution: sql`coalesce(excluded.institution, ${accounts.institution})`,
+          mask: sql`coalesce(excluded.mask, ${accounts.mask})`,
+          type: sql`coalesce(excluded.type, ${accounts.type})`,
+        },
+      })
+  }
+}
+
 export async function upsertTransactions(
-  rows: {
-    id: string
-    date: string
-    amountCents: number
-    merchantRaw: string
-    merchantNorm: string
-    accountId?: string | null
-    copilotCategory?: string | null
-    notes?: string | null
-    pending?: boolean
-  }[],
+  rows: NormalizedTxn[],
   sourceDocId: string | null,
 ): Promise<number> {
   const { createHash } = await import('node:crypto')
+  await upsertAccountsFor(rows)
   let n = 0
   for (let i = 0; i < rows.length; i += 200) {
-    const chunk = rows.slice(i, i + 200).map((r) => ({
+    // `account` is carried for upsertAccountsFor above; it is not a column.
+    const chunk = rows.slice(i, i + 200).map(({ account: _account, ...r }) => ({
       ...r,
       accountId: r.accountId ?? null,
       pending: r.pending ?? false,
