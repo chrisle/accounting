@@ -1,7 +1,16 @@
 # syntax=docker/dockerfile:1
 
+# Node 22, not 24, and deliberately so. better-sqlite3 11.x predates Node 24:
+# its Statement destructor calls node::RemoveEnvironmentCleanupHook, which
+# Node 24.19 aborts on (`Assertion failed: (env) != nullptr`). That is a hard
+# SIGABRT mid-query, not a warning — it killed the server six times in the
+# first ten minutes of the first deploy, and took the seed down with it.
+# Upgrading to better-sqlite3 >=12 (the first line declaring node 24.x in
+# engines) fixes it on 24 and lets this go back; until then, pin the runtime.
+ARG NODE_IMAGE=node:22-bookworm-slim
+
 # ---------- deps ----------
-FROM node:24-bookworm-slim AS deps
+FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
 # better-sqlite3 needs a toolchain to build its native binding.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,7 +20,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci
 
 # ---------- build ----------
-FROM node:24-bookworm-slim AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules ./node_modules
@@ -19,7 +28,7 @@ COPY . .
 RUN npm run build
 
 # ---------- runtime ----------
-FROM node:24-bookworm-slim AS runner
+FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
