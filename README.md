@@ -4,6 +4,11 @@ Project-level cost attribution across Copilot Money, Amazon and Google Cloud.
 One Next.js app, one container, one SQLite file. Runs on Proxmox, reachable from
 a browser over Tailscale.
 
+Reference documentation is in [`docs/`](docs/) — [architecture](docs/architecture.md),
+[data model](docs/data-model.md), [pipeline](docs/pipeline.md),
+[sources](docs/sources.md), [operations](docs/operations.md) and
+[development](docs/development.md).
+
 ## The idea
 
 A bank transaction is a rollup that lies about where the money went. One $340
