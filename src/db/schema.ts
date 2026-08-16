@@ -306,6 +306,30 @@ export const jobs = sqliteTable(
   (t) => [index('jobs_status_idx').on(t.status, t.queuedAt)],
 )
 
+// -------------------------------------------------------------------- logs
+
+/**
+ * Runtime events, so the Sources page isn't the only window into what the app
+ * is doing. Per-job output lives on `jobs.log`; this is the cross-cutting
+ * stream — worker lifecycle, the nightly scheduler, sync failures, invariant
+ * warnings. Capped by row count on write (see trimLogs) so it can't fill the
+ * disk the way the deploy build cache did.
+ */
+export const logs = sqliteTable(
+  'logs',
+  {
+    id: text('id').primaryKey(),
+    ts: integer('ts').notNull().default(sql`(unixepoch())`),
+    level: text('level', { enum: ['info', 'warn', 'error'] })
+      .notNull()
+      .default('info'),
+    source: text('source').notNull(), // worker | scheduler | sync:copilot | ...
+    message: text('message').notNull(),
+    detail: text('detail'), // stack trace / json, when there's more to say
+  },
+  (t) => [index('logs_ts_idx').on(t.ts), index('logs_level_idx').on(t.level)],
+)
+
 export type Project = typeof projects.$inferSelect
 export type Transaction = typeof transactions.$inferSelect
 export type LineItem = typeof lineItems.$inferSelect
@@ -313,3 +337,4 @@ export type Allocation = typeof allocations.$inferSelect
 export type Rule = typeof rules.$inferSelect
 export type Job = typeof jobs.$inferSelect
 export type SourceState = typeof sourceState.$inferSelect
+export type LogEntry = typeof logs.$inferSelect

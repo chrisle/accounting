@@ -73,9 +73,12 @@ export async function getJob(id: string): Promise<Job | null> {
 }
 
 /** A crash mid-job leaves a zombie 'running' row; reap it at boot. */
-export async function reapStale(): Promise<void> {
+export async function reapStale(): Promise<number> {
+  const stale = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.status, 'running'))
+  if (stale.length === 0) return 0
   await db
     .update(jobs)
     .set({ status: 'error', error: 'interrupted by restart', finishedAt: Math.floor(Date.now() / 1000) })
     .where(eq(jobs.status, 'running'))
+  return stale.length
 }

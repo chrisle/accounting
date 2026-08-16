@@ -4,6 +4,7 @@ import { db, sourceDocuments, sourceState, type Job } from '@/db'
 import { runAttribute, runLink, upsertLineItems, upsertTransactions } from '@/lib/pipeline'
 import { copilotAdapter, gcpAdapter } from '@/lib/sources/registry'
 import { exportConfig } from '@/lib/config-export'
+import { logWarn } from '@/lib/logs'
 import type { JobLogger } from '@/lib/sources/types'
 
 /** Default sync window. Long enough to catch late-posting and amended rows. */
@@ -18,6 +19,10 @@ async function markSource(
   status: 'ok' | 'error',
   error?: string,
 ): Promise<void> {
+  // Surface per-source failures on the logs page. Inside sync:all these are
+  // caught so one source can't stop the others, so the job itself succeeds and
+  // this warning is the only global signal that a connector is down.
+  if (status === 'error') logWarn(`sync:${source}`, error ?? 'sync failed')
   await db
     .insert(sourceState)
     .values({

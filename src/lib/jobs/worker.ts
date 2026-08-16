@@ -1,6 +1,7 @@
 import { appendLog, claimNext, enqueue, finish, reapStale } from './queue'
 import { runJob } from './tasks'
 import { runMigrations } from '@/db/migrate'
+import { logInfo, logError, logWarn, trimLogs } from '@/lib/logs'
 
 /**
  * Next has no worker process, and that's fine — `output: 'standalone'` is a
@@ -26,13 +27,18 @@ async function drain(): Promise<void> {
 
     try {
       log(`started`)
+      logInfo(job.kind, 'started')
       await runJob(job, log)
       await finish(job.id, 'ok')
       log(`done`)
+      logInfo(job.kind, 'done')
     } catch (e) {
       const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
       log(`FAILED: ${msg}`)
+      logError(job.kind, e instanceof Error ? e.message : String(e), e)
       await finish(job.id, 'error', e instanceof Error ? e.message : String(e))
+    } finally {
+      trimLogs()
     }
   }
 }
@@ -50,14 +56,16 @@ function msUntil(hhmm: string): number {
 function scheduleNightly(): void {
   const at = process.env.COSTS_SYNC_AT ?? '04:15'
   if (at === 'off') {
-    console.log('[worker] nightly sync disabled')
+    logInfo('scheduler', 'nightly sync disabled')
     return
   }
   const wait = msUntil(at)
-  console.log(
-    `[worker] nightly sync at ${at} (in ${(wait / 3_600_000).toFixed(1)}h)`,
+  logInfo(
+    'scheduler',
+    `nightly sync at ${at} (in ${(wait / 3_600_000).toFixed(1)}h)`,
   )
   setTimeout(() => {
+    logInfo('scheduler', 'nightly sync firing')
     void enqueue('sync:all')
     scheduleNightly()
   }, wait).unref?.()
@@ -68,15 +76,20 @@ export function startWorker(): void {
   started = true
 
   runMigrations()
-  void reapStale()
+  void reapStale().then((n) => {
+    if (n > 0) logWarn('worker', `reaped ${n} stale job(s) left running by a restart`)
+  })
 
   const tick = () => {
     drain()
-      .catch((e) => console.error('[worker] drain error', e))
+      .catch((e) => {
+        console.error('[worker] drain error', e)
+        logError('worker', 'drain error', e)
+      })
       .finally(() => setTimeout(tick, POLL_MS).unref?.())
   }
   tick()
 
   scheduleNightly()
-  console.log('[worker] started')
+  logInfo('worker', 'started')
 }
