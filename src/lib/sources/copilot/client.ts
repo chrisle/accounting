@@ -7,33 +7,37 @@ const ENDPOINT =
   process.env.COPILOT_GRAPHQL_URL ?? 'https://app.copilot.money/api/graphql'
 
 /**
- * ------------------------------------------------------------------------
- * UNVERIFIED: the exact query shape below is inferred, not confirmed.
+ * Verified against the live API on 2026-08-15. `Query.transactions` is a
+ * Relay-style connection, and the fields are flat — `accountId`/`categoryId`
+ * rather than nested `account`/`category` objects. The shape here matches the
+ * `TransactionFields` fragment in Copilot's own web bundle.
  *
- * Copilot publishes no schema and the endpoint needs a live account to
- * introspect, which I can't do from here. The field names follow the
- * conventions the community clients use, but expect to adjust them on first
- * connect. `normalizeTxn` is deliberately tolerant of several shapes so a
- * naming mismatch degrades to "no rows" rather than a crash, and
- * `introspect()` is wired up so you can dump the real schema in one click
- * from the Sources page and correct this.
- * ------------------------------------------------------------------------
+ * Note that server-side introspection is disabled (Apollo returns
+ * INTROSPECTION_DISABLED), so `introspect()` below cannot work in production.
+ * The way to re-derive this is to send a deliberately wrong field and read
+ * Apollo's "Did you mean" validation errors — see ops/copilot-token.sh.
  */
 const TRANSACTIONS_QUERY = `
-query Transactions($start: String!, $end: String!, $limit: Int!, $cursor: String) {
-  transactions(startDate: $start, endDate: $end, limit: $limit, cursor: $cursor) {
-    cursor
-    items {
-      id
-      date
-      amount
-      name
-      merchant { name }
-      account { id name mask }
-      category { id name }
-      notes
-      pending
-      excluded
+query Transactions($first: Int, $after: String, $filter: TransactionFilter) {
+  transactions(first: $first, after: $after, filter: $filter) {
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+    edges {
+      cursor
+      node {
+        id
+        date
+        amount
+        name
+        accountId
+        categoryId
+        isPending
+        userNotes
+        type
+        parentId
+      }
     }
   }
 }`
@@ -65,7 +69,10 @@ export async function graphql<T>(
   return json.data
 }
 
-/** Dump the live schema so the query above can be corrected against reality. */
+/**
+ * Kept for the Sources page, but the server refuses it in production. Prefer
+ * probing with a wrong field name and reading the validation error.
+ */
 export async function introspect(): Promise<string> {
   const data = await graphql<{ __schema: { types: unknown[] } }>(`
     { __schema { queryType { name }
@@ -74,36 +81,58 @@ export async function introspect(): Promise<string> {
   return JSON.stringify(data, null, 2)
 }
 
-type RawTxn = Record<string, any>
+type RawTxn = {
+  id: string
+  date: string
+  amount: number | string
+  name?: string | null
+  accountId?: string | null
+  categoryId?: string | null
+  isPending?: boolean | null
+  userNotes?: string | null
+  type?: string | null
+  parentId?: string | null
+}
 
-/** Tolerant of several plausible field spellings — see the note above. */
+/**
+ * Money between one account of yours and another isn't a cost. Including it
+ * would inflate every total and leave transfers sitting in the review queue
+ * forever, since no rule can meaningfully attribute them to a project.
+ */
+const SKIPPED_TYPES = new Set(['INTERNAL_TRANSFER'])
+
 function normalizeTxn(r: RawTxn): NormalizedTxn | null {
-  const id = r.id ?? r.transactionId ?? r._id
-  const date: string | undefined = (r.date ?? r.postedDate ?? r.transactionDate)
-    ?.toString()
-    .slice(0, 10)
-  const rawAmount =
-    r.amount ?? (r.amountCents != null ? r.amountCents / 100 : undefined) ?? r.value
-  if (!id || !date || rawAmount == null) return null
+  const id = r.id
+  const date = r.date?.toString().slice(0, 10)
+  if (!id || !date || r.amount == null) return null
+  if (r.type && SKIPPED_TYPES.has(r.type)) return null
 
-  const merchantRaw: string =
-    r.merchant?.name ?? r.merchantName ?? r.name ?? r.description ?? 'unknown'
+  const merchantRaw = r.name?.trim() || 'unknown'
 
-  // Copilot reports spend as a positive number in some surfaces. Money out is
-  // negative here, always — the sign convention has to be unambiguous or the
-  // reconciliation invariant becomes meaningless.
-  const cents = typeof rawAmount === 'number' ? toCents(rawAmount) : toCents(String(rawAmount))
+  // Copilot's sign convention is the opposite of this ledger's: it reports
+  // spend as positive and income as negative. Flipping here is what keeps
+  // "money out is negative" true everywhere downstream — get this wrong and
+  // the dashboard, which filters on amount_cents <= 0, silently shows nothing.
+  const amountCents = -toCents(
+    typeof r.amount === 'number' ? r.amount : String(r.amount),
+  )
+
+  const accountId = r.accountId ?? null
 
   return {
     id: String(id),
     date,
-    amountCents: cents,
+    amountCents,
     merchantRaw,
     merchantNorm: normalizeMerchant(merchantRaw),
-    accountId: r.account?.id ?? r.accountId ?? null,
-    copilotCategory: r.category?.name ?? r.categoryName ?? null,
-    notes: r.notes ?? null,
-    pending: Boolean(r.pending),
+    accountId,
+    // Only the id is exposed on the transaction; the account's name and mask
+    // live behind a separate query, so this creates a stub row that a later
+    // sync can fill in. transactions.account_id is a foreign key.
+    account: accountId ? { id: accountId } : null,
+    copilotCategory: r.categoryId ?? null,
+    notes: r.userNotes ?? null,
+    pending: Boolean(r.isPending),
   }
 }
 
@@ -111,31 +140,40 @@ export async function fetchTransactions(
   range: DateRange,
   log: JobLogger,
 ): Promise<NormalizedTxn[]> {
-  type Page = { transactions: { cursor: string | null; items: RawTxn[] } }
+  type Page = {
+    transactions: {
+      pageInfo: { hasNextPage: boolean; endCursor: string | null }
+      edges: { cursor: string; node: RawTxn }[]
+    }
+  }
 
   const out: NormalizedTxn[] = []
-  let cursor: string | null = null
+  let after: string | null = null
   let page = 0
+  let skipped = 0
 
-  do {
+  for (;;) {
     const data: Page = await graphql<Page>(TRANSACTIONS_QUERY, {
-      start: range.start,
-      end: range.end,
-      limit: 500,
-      cursor,
+      first: 500,
+      after,
+      filter: { dates: { from: range.start, to: range.end } },
     })
 
-    const items = data.transactions?.items ?? []
-    for (const raw of items) {
-      if (raw.excluded) continue // hidden in Copilot -> hidden here
-      const n = normalizeTxn(raw)
+    const edges = data.transactions?.edges ?? []
+    for (const edge of edges) {
+      const n = normalizeTxn(edge.node)
       if (n) out.push(n)
+      else skipped++
     }
 
-    cursor = data.transactions?.cursor ?? null
-    log(`  page ${++page}: ${items.length} rows (${out.length} total)`)
-    if (page > 200) break // runaway guard
-  } while (cursor)
+    const info = data.transactions?.pageInfo
+    log(`  page ${++page}: ${edges.length} rows (${out.length} kept)`)
 
+    if (!info?.hasNextPage || !info.endCursor) break
+    after = info.endCursor
+    if (page > 200) break // runaway guard
+  }
+
+  if (skipped > 0) log(`  skipped ${skipped} transfers and unusable rows`)
   return out
 }
