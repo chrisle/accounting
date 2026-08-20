@@ -31,13 +31,27 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8').trim()
 }
 
-const token = await readStdin()
+let token = await readStdin()
 if (!token) die('Empty stdin — nothing to save.')
 // Firebase refresh tokens are long opaque strings; a stray "copied" line or an
 // ID token (three dot-separated segments) is a paste mistake worth catching.
 if (token.length < 40) die(`That is ${token.length} chars — too short for a refresh token.`)
 if (token.split('.').length === 3) die('That looks like an ID token, not a refresh token.')
-if (/\s/.test(token)) die('The token has whitespace in it — check what was copied.')
+// A clipboard that picked up console output or a terminal selection has the
+// token buried in other text. Recovering it beats making the user re-copy, and
+// a wrong guess is harmless: Firebase verifies it before anything is stored.
+if (/\s/.test(token)) {
+  const candidates = [...new Set(token.split(/\s+/).filter((w) => /^[A-Za-z0-9_-]{40,}$/.test(w)))]
+  if (candidates.length !== 1) {
+    die(
+      candidates.length === 0
+        ? 'The input has whitespace and nothing in it looks like a refresh token — check what was copied.'
+        : `Found ${candidates.length} token-shaped strings in the input; pipe in just the token.`,
+    )
+  }
+  console.log(`Input had surrounding text — using the one token-shaped string in it (${candidates[0].length} chars).`)
+  token = candidates[0]
+}
 
 // saveRefreshToken proves the token against Firebase before it stores it, so a
 // bad paste fails here without leaving the source looking connected.
