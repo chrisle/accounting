@@ -52,7 +52,7 @@ resolve a shortfall by dropping it.
 
 ```bash
 npm run dev                    # localhost:3000
-npm test                       # 20 tests, node:test via tsx
+npm test                       # 46 tests, node:test via tsx
 npm run db:migrate             # apply migrations
 npm run db:seed                # 14 months of demo data (see below)
 npm run db:reset               # rm the db, migrate, seed
