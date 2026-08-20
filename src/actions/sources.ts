@@ -6,6 +6,7 @@ import { db, sourceState } from '@/db'
 import { enqueue, type JobKind } from '@/lib/jobs/queue'
 import { putSecret } from '@/lib/secrets'
 import { saveRefreshToken, disconnect as disconnectCopilot } from '@/lib/sources/copilot/auth'
+import { verifyCredentials, clearTokenCache } from '@/lib/sources/paypal/auth'
 
 export async function syncNow(kind: JobKind) {
   const id = await enqueue(kind)
@@ -63,5 +64,31 @@ export async function connectGcp(formData: FormData) {
     })
 
   await enqueue('sync:gcp')
+  revalidatePath('/sources')
+}
+
+export async function connectPaypal(formData: FormData) {
+  const clientId = String(formData.get('clientId') ?? '').trim()
+  const secret = String(formData.get('secret') ?? '').trim()
+  if (!clientId || !secret) {
+    throw new Error('Both a client ID and a secret are required')
+  }
+
+  // Ask PayPal before storing: a Sandbox credential pasted into the Live form
+  // looks identical, and only the token endpoint can tell the difference.
+  await verifyCredentials(clientId, secret)
+
+  await putSecret('paypal.client_id', clientId)
+  await putSecret('paypal.secret', secret)
+  clearTokenCache()
+  await db
+    .insert(sourceState)
+    .values({ source: 'paypal', connected: true })
+    .onConflictDoUpdate({
+      target: sourceState.source,
+      set: { connected: true, lastError: null },
+    })
+
+  await enqueue('sync:paypal')
   revalidatePath('/sources')
 }

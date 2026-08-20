@@ -2,7 +2,13 @@
 
 import { useRef, useState, useTransition } from 'react'
 import { Badge, Card } from '@/components/ui'
-import { connectCopilot, connectGcp, disconnectSource, syncNow } from '@/actions/sources'
+import {
+  connectCopilot,
+  connectGcp,
+  connectPaypal,
+  disconnectSource,
+  syncNow,
+} from '@/actions/sources'
 import type { JobKind } from '@/lib/jobs/queue'
 
 type State = {
@@ -206,6 +212,40 @@ export function SourceCard({
             rows={4}
             placeholder='{"type":"service_account", ...}'
             className="rounded border border-line bg-surface-2 px-2 py-1.5 font-mono text-[11px]"
+          />
+          <button className="self-start rounded border border-line px-3 py-1.5 text-xs font-medium hover:bg-surface-2">
+            Save &amp; sync
+          </button>
+        </form>
+      )}
+
+      {open && adapter.id === 'paypal' && (
+        <form action={connectPaypal} className="mt-4 flex flex-col gap-2 border-t border-line pt-4">
+          <p className="text-xs text-ink-3">
+            REST API credentials from{' '}
+            <a
+              href="https://developer.paypal.com/dashboard/applications/live"
+              target="_blank"
+              rel="noreferrer"
+              className="underline hover:text-ink"
+            >
+              developer.paypal.com
+            </a>{' '}
+            → Apps &amp; Credentials → <strong>Live</strong>. Sandbox credentials
+            authenticate fine but return no real transactions.
+          </p>
+          <input
+            name="clientId"
+            required
+            placeholder="Client ID"
+            className="rounded border border-line bg-surface-2 px-2 py-1.5 text-xs"
+          />
+          <input
+            name="secret"
+            required
+            type="password"
+            placeholder="Secret"
+            className="rounded border border-line bg-surface-2 px-2 py-1.5 text-xs"
           />
           <button className="self-start rounded border border-line px-3 py-1.5 text-xs font-medium hover:bg-surface-2">
             Save &amp; sync

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { eq, sql } from 'drizzle-orm'
 import { db, sourceDocuments, sourceState, type Job } from '@/db'
 import { runAttribute, runLink, upsertLineItems, upsertTransactions } from '@/lib/pipeline'
-import { copilotAdapter, gcpAdapter } from '@/lib/sources/registry'
+import { copilotAdapter, gcpAdapter, paypalAdapter } from '@/lib/sources/registry'
 import { exportConfig } from '@/lib/config-export'
 import { logWarn } from '@/lib/logs'
 import type { JobLogger } from '@/lib/sources/types'
@@ -105,6 +105,25 @@ export async function runJob(job: Job, log: JobLogger): Promise<void> {
       break
     }
 
+    case 'sync:paypal': {
+      const range = payload.range ?? defaultRange(120)
+      log(`PayPal: fetching ${range.start} .. ${range.end}`)
+      try {
+        const items = await paypalAdapter.fetch!(range, log)
+        const docId = await recordDoc('paypal', 'query', items.length, {
+          periodStart: range.start,
+          periodEnd: range.end,
+        })
+        const n = await upsertLineItems('paypal', items, docId)
+        log(`PayPal: ${n} payments upserted`)
+        await markSource('paypal', 'ok')
+      } catch (e) {
+        await markSource('paypal', 'error', String(e))
+        throw e
+      }
+      break
+    }
+
     case 'ingest:amazon': {
       // The upload route has already parsed and stored the archive; this job
       // just folds the parsed rows into the ledger.
@@ -149,7 +168,7 @@ export async function runJob(job: Job, log: JobLogger): Promise<void> {
     case 'sync:all': {
       // Sources are independent: one failing must not stop the others, and
       // attribution should still run on whatever did land.
-      for (const kind of ['sync:copilot', 'sync:gcp'] as const) {
+      for (const kind of ['sync:copilot', 'sync:gcp', 'sync:paypal'] as const) {
         try {
           await runJob({ ...job, kind, payload: {} }, log)
         } catch (e) {

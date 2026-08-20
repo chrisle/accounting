@@ -38,9 +38,9 @@ export default async function SourcesPage() {
       <div>
         <h1 className="text-lg font-semibold">Sources</h1>
         <p className="mt-1 max-w-2xl text-sm text-ink-3">
-          Copilot and Google Cloud sync unattended on a nightly schedule. Amazon
-          can&apos;t — its item-level export is a login, an OTP and a 24-hour wait
-          — so that one is an upload.
+          Copilot, Google Cloud and PayPal sync unattended on a nightly
+          schedule. Amazon can&apos;t — its item-level export is a login, an OTP
+          and a 24-hour wait — so that one is an upload.
         </p>
       </div>
 

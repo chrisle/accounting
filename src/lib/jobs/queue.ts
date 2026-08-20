@@ -5,6 +5,7 @@ import { db, jobs, type Job } from '@/db'
 export type JobKind =
   | 'sync:copilot'
   | 'sync:gcp'
+  | 'sync:paypal'
   | 'ingest:amazon'
   | 'link'
   | 'attribute'
