@@ -1,5 +1,5 @@
 import { Card, Empty, Stat } from '@/components/ui'
-import { ReviewList } from './review-list'
+import { ReviewTable } from './review-table'
 import { listProjects, reviewQueue, summary } from '@/lib/queries'
 import { formatCents } from '@/lib/money'
 
@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic'
 
 export default async function ReviewPage() {
   const [queue, projects, sum] = await Promise.all([
-    reviewQueue(200),
+    reviewQueue(1000),
     listProjects(),
     summary(14),
   ])
@@ -43,7 +43,7 @@ export default async function ReviewPage() {
         />
       ) : (
         <Card title={`${queue.length} items`}>
-          <ReviewList items={queue} projects={real} />
+          <ReviewTable items={queue} projects={real} />
         </Card>
       )}
     </div>
