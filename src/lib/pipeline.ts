@@ -105,7 +105,14 @@ export async function runLink(log: JobLogger = noop): Promise<number> {
 export async function runAttribute(
   log: JobLogger = noop,
   opts: { since?: string } = {},
-): Promise<{ txns: number; allocations: number; unallocatedCents: number }> {
+): Promise<{
+  txns: number
+  allocations: number
+  unallocatedCents: number
+  /** Spend only (money out), so coverage matches what the dashboard reports. */
+  spendCents: number
+  unallocatedSpendCents: number
+}> {
   const [engine, ovr] = await Promise.all([RuleEngine.load(), OverrideSet.load()])
   log(`loaded rules + ${ovr.size} overrides`)
 
@@ -130,6 +137,8 @@ export async function runAttribute(
   const ctx = { classify: engine.classify.bind(engine) }
   const out: ReturnType<typeof withIds> = []
   let unallocatedCents = 0
+  let spendCents = 0
+  let unallocatedSpendCents = 0
 
   for (const txn of txns) {
     const drafts = buildDrafts(txn, itemsByTxn.get(txn.id) ?? [], ovr, ctx)
@@ -138,6 +147,12 @@ export async function runAttribute(
 
     for (const b of balanced) {
       if (b.projectId === UNALLOCATED) unallocatedCents += b.amountCents
+      // Refunds and income would otherwise net against costs and make coverage
+      // read better than it is, so the ratio is taken over money out only.
+      if (b.amountCents <= 0) {
+        spendCents += Math.abs(b.amountCents)
+        if (b.projectId === UNALLOCATED) unallocatedSpendCents += Math.abs(b.amountCents)
+      }
     }
     out.push(...withIds(balanced))
   }
@@ -157,7 +172,13 @@ export async function runAttribute(
   })
 
   log(`attributed ${txns.length} charges -> ${out.length} allocations`)
-  return { txns: txns.length, allocations: out.length, unallocatedCents }
+  return {
+    txns: txns.length,
+    allocations: out.length,
+    unallocatedCents,
+    spendCents,
+    unallocatedSpendCents,
+  }
 }
 
 function buildDrafts(

@@ -135,10 +135,13 @@ export async function runJob(job: Job, log: JobLogger): Promise<void> {
     case 'attribute': {
       const r = await runAttribute(log, payload.since ? { since: payload.since } : {})
       const pct =
-        r.allocations > 0
-          ? ((Math.abs(r.unallocatedCents) / Math.max(1, Math.abs(r.unallocatedCents) + 1)) * 100).toFixed(1)
-          : '0'
-      log(`unallocated: ${(r.unallocatedCents / 100).toFixed(2)} (${pct}% of rows need triage)`)
+        r.spendCents > 0
+          ? ((r.unallocatedSpendCents / r.spendCents) * 100).toFixed(1)
+          : '0.0'
+      log(
+        `unallocated: ${(r.unallocatedSpendCents / 100).toFixed(2)} of ` +
+          `${(r.spendCents / 100).toFixed(2)} spend (${pct}% needs triage)`,
+      )
       await exportConfig(log)
       break
     }
