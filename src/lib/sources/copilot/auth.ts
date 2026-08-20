@@ -18,20 +18,76 @@ const SECRET_APIKEY = 'copilot.api_key'
 
 // Firebase Web API key for the Copilot production project. Public by design —
 // it identifies the app, it does not authorise anything on its own.
-const DEFAULT_API_KEY = 'AIzaSyC1t5Z9nq4Z0Zw6xR7VqXK1r9Gk_Q0PLACEHOLDER'
+const DEFAULT_API_KEY = 'AIzaSyAMgjkeOSkHj4J4rlswOkD16N3WQOoNPpk'
 
 let cached: { token: string; expiresAt: number } | null = null
+
+type Exchange = { idToken: string; refreshToken?: string; ttl: number }
+
+/**
+ * The bare securetoken call. Split out from getIdToken so a token can be proven
+ * live *before* it is stored — a rejected paste that gets sealed anyway leaves
+ * the source reading "connected" with a credential that can never sync.
+ */
+export async function exchangeRefreshToken(
+  refresh: string,
+  apiKey: string = DEFAULT_API_KEY,
+): Promise<Exchange> {
+  const res = await fetch(
+    `https://securetoken.googleapis.com/v1/token?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refresh,
+      }),
+    },
+  )
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    const code = /"message":\s*"([A-Z_]+)"/.exec(body)?.[1]
+    throw new Error(
+      code === 'API_KEY_INVALID'
+        ? 'Firebase rejected the API key. Re-extract it with ops/copilot-token.sh.'
+        : `Firebase token refresh failed (${res.status}${code ? `: ${code}` : ''}). ` +
+          'The refresh token is probably revoked or mistyped — reconnect Copilot.',
+    )
+  }
+
+  const json = (await res.json()) as {
+    id_token: string
+    refresh_token?: string
+    expires_in: string
+  }
+  return {
+    idToken: json.id_token,
+    refreshToken: json.refresh_token,
+    ttl: Number(json.expires_in || 3600),
+  }
+}
 
 export async function isConnected(): Promise<boolean> {
   return (await getSecret(SECRET_REFRESH)) !== null
 }
 
+/**
+ * Verifies before it stores. Firebase is the only thing that can tell a good
+ * refresh token from a bad paste, and asking costs one request.
+ */
 export async function saveRefreshToken(
   token: string,
   apiKey?: string,
 ): Promise<void> {
-  await putSecret(SECRET_REFRESH, token.trim())
-  if (apiKey) await putSecret(SECRET_APIKEY, apiKey.trim())
+  const trimmed = token.trim()
+  const key = apiKey?.trim()
+  const { refreshToken } = await exchangeRefreshToken(trimmed, key || DEFAULT_API_KEY)
+
+  // Firebase may hand back a rotated token on this very exchange; store that
+  // one rather than the paste, or the next sync starts from a spent token.
+  await putSecret(SECRET_REFRESH, refreshToken || trimmed)
+  if (key) await putSecret(SECRET_APIKEY, key)
   cached = null
 }
 
@@ -51,38 +107,13 @@ export async function getIdToken(): Promise<string> {
   }
   const apiKey = (await getSecret(SECRET_APIKEY)) ?? DEFAULT_API_KEY
 
-  const res = await fetch(
-    `https://securetoken.googleapis.com/v1/token?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refresh,
-      }),
-    },
-  )
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(
-      `Firebase token refresh failed (${res.status}). ` +
-        `The refresh token is probably revoked — reconnect Copilot. ${body.slice(0, 200)}`,
-    )
-  }
-
-  const json = (await res.json()) as {
-    id_token: string
-    refresh_token?: string
-    expires_in: string
-  }
+  const { idToken, refreshToken, ttl } = await exchangeRefreshToken(refresh, apiKey)
 
   // Firebase can hand back a rotated refresh token; persist it or we lock out.
-  if (json.refresh_token && json.refresh_token !== refresh) {
-    await putSecret(SECRET_REFRESH, json.refresh_token)
+  if (refreshToken && refreshToken !== refresh) {
+    await putSecret(SECRET_REFRESH, refreshToken)
   }
 
-  const ttl = Number(json.expires_in || 3600)
-  cached = { token: json.id_token, expiresAt: Date.now() + (ttl - 300) * 1000 }
-  return cached.token
+  cached = { token: idToken, expiresAt: Date.now() + (ttl - 300) * 1000 }
+  return idToken
 }
