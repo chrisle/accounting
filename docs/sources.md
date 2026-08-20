@@ -9,6 +9,9 @@ falls into one of three archetypes.
 | `itemized` | Amazon | 1 → N items | bounded subset-sum over a settlement window |
 | `metered` | Google Cloud | 1 invoice → N project×SKU | billing period + proportional |
 
+PayPal is `itemized`: the card sees "PAYPAL *SOMESHOP", and what was bought is
+only visible inside PayPal.
+
 ## The interface
 
 ```ts
@@ -39,6 +42,7 @@ engine, so adapters never hard-code attribution.
 |---|---|
 | Copilot Money | Yes — a long-lived Firebase refresh token is exchanged for a 1-hour ID token, then used against Copilot's GraphQL API |
 | Google Cloud | Yes — service account → BigQuery detailed billing export |
+| PayPal | Yes — client-credentials token against the REST API, then Transaction Search |
 | Amazon | No. A login, an OTP, and a ~24h wait for an emailed ZIP |
 
 ### Copilot Money
@@ -58,9 +62,11 @@ Playwright.
 > degrades to "no rows" rather than a crash. `introspect()` dumps the real schema
 > so it can be corrected on first connect.
 
-> **`DEFAULT_API_KEY` in `copilot/auth.ts` is a placeholder string**, not a working
-> Firebase key — Google rejects it with `API_KEY_INVALID`. Connecting requires
-> supplying the real Web API key alongside the refresh token.
+`DEFAULT_API_KEY` in `copilot/auth.ts` is the real Web API key, scraped from the
+published bundle and verified against `securetoken`, so the API key field on the
+Sources form is genuinely optional. `saveRefreshToken` exchanges a token before
+storing it — a bad paste fails at the form instead of leaving the card reading
+"connected" while every sync fails.
 
 ### Getting the credentials
 
@@ -151,3 +157,32 @@ One folder under `src/lib/sources/`, one line in `registry.ts`, no core changes.
 4. Emit negative cents for money out, and a stable `externalId` so re-ingest
    upserts instead of duplicating.
 5. Don't try to make `allocate()` tie exactly; that's `reconcile()`'s job.
+
+### PayPal
+
+Credentials are a client ID and secret from
+[developer.paypal.com](https://developer.paypal.com/dashboard/applications/live)
+→ Apps & Credentials → **Live**. They exchange for a bearer token that lasts
+about nine hours; there is no user consent step and no refresh token, so it runs
+unattended once stored. Sandbox credentials authenticate perfectly well and then
+return no transactions, which is why `connectPaypal` verifies against the live
+token endpoint before storing anything.
+
+Two limits on `/v1/reporting/transactions` shape `client.ts`:
+
+- **31 days per request.** `windows()` splits a longer range into contiguous
+  slices, so a 120-day sync is four requests, not one rejection.
+- **Page numbers, not cursors.** The response carries `total_pages`, and the
+  loop walks them.
+
+Transactions appear in the report roughly three hours after they happen, so a
+sync run just after a purchase will not see it. The next run does.
+
+Money moving between the user's own PayPal balance and their own bank — event
+codes `T03xx` (funding) and `T04xx` (withdrawal) — is dropped. Counting it would
+double every purchase: once as the payment, once as the withdrawal that funded
+it. This is the same trap `INTERNAL_TRANSFER` avoids on the Copilot side.
+
+PayPal signs money out as negative already, which matches this ledger, so unlike
+Copilot the value passes through unflipped. The fee is a separate negative field
+and is folded into the line item, because the card is charged the total.
