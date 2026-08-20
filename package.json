@@ -12,7 +12,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "rm -f ${COSTS_DATA_DIR:-./data}/costs.db* && npm run db:migrate && npm run db:seed",
-    "test": "tsx --test tests/*.test.ts"
+    "test": "tsx --test tests/*.test.ts",
+    "copilot:connect": "tsx ops/copilot-connect.ts"
   },
   "dependencies": {
     "@google-cloud/bigquery": "^7.9.1",
